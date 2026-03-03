@@ -1,0 +1,6 @@
+# Not including following directories
+.idea/
+__pycache__/
+*.pyc
+venv/
+env/
