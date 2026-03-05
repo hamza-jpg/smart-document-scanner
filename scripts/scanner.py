@@ -93,7 +93,7 @@ class DocumentScanner:
             # contour_area = cv2.contourArea(c) (Test)
             print(f"Shape found with {len(approx)} corners")
 
-            if len(approx) == 4:
+            if 4 <= len(approx) <= 14:
                 print("Found a valid, large document!")
                 return approx
 
@@ -127,7 +127,7 @@ class DocumentScanner:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
 
-            if len(approx) == 4:
+            if len(approx) >= 4:
                 return approx
             else:
                 rect = cv2.minAreaRect(c)
@@ -154,7 +154,8 @@ class DocumentScanner:
 
     # Warping the document to top down perspective
     def get_scan(self, contour):
-        pts = contour.reshape(4,2) * self.ratio
+
+        pts = contour.reshape(-1,2) * self.ratio
         rect = self._order_points(pts)
         (tl, tr, br, bl) = rect
 
@@ -177,9 +178,20 @@ class DocumentScanner:
 
         return warped
 
+    # Black and white filter
+    def apply_bw_filter(self, warped_image):
+        gray = cv2.cvtColor(warped_image, cv2.COLOR_BGR2GRAY)
+
+        bw_scan = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 21, 10
+        )
+
+        return bw_scan
+
 # Test Block
 if __name__ == "__main__":
-    scanner = DocumentScanner("../pictures/sudoku.png")
+    scanner = DocumentScanner("../pictures/sudoku3.png.")
     doc_contour = scanner.find_document_contour()
 
     if doc_contour is not None:
@@ -187,10 +199,17 @@ if __name__ == "__main__":
                          (0, 255, 0), 2)
         cv2.imshow("STEP 1: Detected Document", scanner.resized)
 
-        final_scan = scanner.get_scan(doc_contour)
-        cv2.imshow("STEP 2: Flattened Scan", final_scan)
+        flat_scan = scanner.get_scan(doc_contour)
+        display_scan = scanner._resize_image(flat_scan, height = 500)
+        cv2.imshow("STEP 2: Flattened Scan", display_scan)
+
+        bw_scan = scanner.apply_bw_filter(flat_scan)
+        display_scan_final = scanner._resize_image(bw_scan, height = 500)
+        cv2.imshow("STEP 3: Final black and white", display_scan_final)
     else:
-        print("Both algorithms failed")
+        print("ERROR: Both algorithms failed")
 
     cv2.waitKey(0)
+    # For saving to computer
+    # cv2.imwrite("scan.jpg", bw_scan)
     cv2.destroyAllWindows()
