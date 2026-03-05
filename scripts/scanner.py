@@ -9,8 +9,10 @@ class DocumentScanner:
         if self.image is None:
             raise ValueError(f"Could not load image at {image_path}. "
                              f"Please check the file path again")
+
         # Resizing the image for better use of algorithms such as canny edge detection
         self.original = self.image.copy()
+
         if self.image.shape[0] > 500:
             self.ratio = self.image.shape[0] / 500.0
             self.resized = self._resize_image(self.image, height = 500)
@@ -18,13 +20,52 @@ class DocumentScanner:
             self.ratio = 1.0
             self.resized = self.image.copy()
 
+        self.screen_cnt = None
+
     # Private resize functionality which keeps proportionality of the image
     def _resize_image(self, image, height):
         h, w = image.shape[:2]
         width = int ((height / h) * w)
         return cv2.resize(image, (width, height))
 
+    # Routes the image to the best algorithm
+    def find_document_contour(self):
+        is_complex = self._needs_heavy_algorithm()
 
+        if is_complex:
+            print("Image flagged as complex (low contrast or high noise)")
+            self.screen_cnt = self._slow_grabcut_detection()
+        else:
+            print("Image looks clean. Routing to Fast Edge Detection")
+            self.screen_cnt = self._fast_edge_detection()
+
+            # When it fails try grabcut just in case
+            if self.screen_cnt is None:
+                print("Fast method unexpectedly failed. Falling back to grabcut...")
+
+        return self.screen_cnt
+
+    # Analyzes image contrast and noise to predict the best algorithm.
+    def _needs_heavy_algorithm(self):
+        grayscale = cv2.cvtColor(self.resized, cv2.COLOR_BGR2GRAY)
+
+        # Measuring contrast (standard deviation)
+        std_dev = np.std(grayscale)
+
+        # Checking clutter
+        edges = cv2.Canny(grayscale, 50, 150)
+        edges_pixels = np.count_nonzero(edges)
+        total_pixels = edges.shape[0] * edges.shape[1]
+        edge_density = (edges_pixels / total_pixels) * 100
+
+        print(f"[Pre-checking] Contrast: {std_dev:.2f} | Edge Clutter: {edge_density:.2f}%")
+
+        if std_dev < 35.0 or edge_density > 15.0:
+            return True
+
+        return False
+
+    # As the name says it is the fast algo based on grayscale and canny
     def _fast_edge_detection(self):
         greyscale = cv2.cvtColor(self.resized, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(greyscale, (5,5), 0)
@@ -35,7 +76,7 @@ class DocumentScanner:
         upper = int(min(255, (1.0 + 0.33) * v))
 
         edged = cv2.Canny(blurred, lower, upper)
-        cv2.imshow("Debug: Edges", edged)
+        # cv2.imshow("Debug: Edges", edged) (Test)
 
         cnts = cv2.findContours(edged.copy(), cv2.RETR_LIST,
                                 cv2.CHAIN_APPROX_SIMPLE)
@@ -58,15 +99,52 @@ class DocumentScanner:
 
         return None
 
+    # Background segmentation for tricky images
+    def _slow_grabcut_detection(self):
+        mask = np.zeros(self.resized.shape[:2], np.uint8)
+        bgdModel = np.zeros((1, 65), np.float64)
+        fgdModel = np.zeros((1,65), np.float64)
+
+        h, w = self.resized.shape[:2]
+        rect = (1, 1, w - 2, h - 2)
+
+        cv2.grabCut(self.resized, mask, rect, bgdModel, fgdModel,
+                    5, cv2.GC_INIT_WITH_RECT)
+        mask2 = np.where((mask == 2) | (mask == 0), 0 ,255).astype('uint8')
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9,9))
+        mask_closed = cv2.morphologyEx(mask2, cv2.MORPH_CLOSE, kernel)
+        mask_blurred = cv2.GaussianBlur(mask_closed, (11,11), 0)
+        _, mask_clean = cv2.threshold(mask_blurred, 127,255,
+                                   cv2.THRESH_BINARY)
+
+        cnts = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)
+        cnts = imutils.grab_contours(cnts)
+
+        if len(cnts) > 0:
+            c = max(cnts, key = cv2.contourArea)
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+            if len(approx) == 4:
+                return approx
+            else:
+                rect = cv2.minAreaRect(c)
+                box = cv2.boxPoints(rect)
+                return np.int32(box)
+
+        return None
+
 # Test Block
 if __name__ == "__main__":
-    scanner = DocumentScanner("../pictures/sudoku.png")
-    doc_contour = scanner._fast_edge_detection()
+    scanner = DocumentScanner("../pictures/test.jpg")
+    doc_contour = scanner.find_document_contour()
     if doc_contour is not None:
         cv2.drawContours(scanner.resized, [doc_contour], -1,
                          (0, 255, 0), 2)
     else:
-        print("No document found to draw.")
+        print("Both algorithms failed")
     cv2.imshow("Document Outline", scanner.resized)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
