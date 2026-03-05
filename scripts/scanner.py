@@ -211,5 +211,5 @@ if __name__ == "__main__":
 
     cv2.waitKey(0)
     # For saving to computer
-    # cv2.imwrite("scan.jpg", bw_scan)
+    cv2.imwrite("scan.jpg", bw_scan)
     cv2.destroyAllWindows()
